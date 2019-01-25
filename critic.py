@@ -19,7 +19,7 @@ class Critic:
     def __init__(self,stateDim:int,nHidden:int,networkUnits:int,networkActivation,useSkips=False,learningRate:float=1e-3,nHistory:int=1,lossType="L2"):
         stateIn=tf.placeholder(dtype=tf.float32,shape=[None,stateDim])
         valueIn=tf.placeholder(dtype=tf.float32,shape=[None,1])             #training targets for value network
-        critic,criticInit=MLP.mlp(stateIn,nHidden,networkUnits,1,networkActivation,firstLinearLayerUnits=0,useSkips=useSkips)  
+        critic,criticInit=MLP.mlp(stateIn,nHidden,networkUnits,1,networkActivation,firstLinearLayerUnits=0,useSkips=useSkips)  #need a handle for the DenseNet instance for network switching
         diff=valueIn-critic
         if lossType=="L2":
             loss=tf.reduce_mean(tf.square(diff))    
@@ -49,7 +49,7 @@ class Critic:
         self.critic=critic
         self.optimize=optimizeCritic
 
-    def train(self,sess,states:np.array,values:np.array,nMinibatch:int,nEpochs:int,nBatches:int=0):
+    def train(self,sess,states:np.array,values:np.array,nMinibatch:int,nEpochs:int,nBatches:int=0,verbose=True):
         assert(np.all(np.isfinite(states)))
         assert(np.all(np.isfinite(values)))
         nData=states.shape[0]
@@ -75,25 +75,12 @@ class Critic:
                 mbState[i,:]=h[0][dataIdx,:]
                 mbValue[i]=h[1][dataIdx]
             if batchIdx==0 and not self.initialized:
-                #init the network biases
+                #init the MLP biases to prevent large values
                 temp,currLoss=sess.run([self.criticInit,self.loss],feed_dict={self.stateIn:mbState,self.valueIn:mbValue})
                 self.initialized=True
             else:
                 temp,currLoss=sess.run([self.optimize,self.loss],feed_dict={self.stateIn:mbState,self.valueIn:mbValue})
-            if batchIdx % 100 == 0:
+            if verbose and (batchIdx % 100 == 0):
                 print("Training critic, batch {}/{}, loss {}".format(batchIdx,nBatches,currLoss))
     def predict(self,sess,states):
         return sess.run(self.critic,feed_dict={self.stateIn:states})
-    def init(self,sess:tf.Session,stateMean:np.array,stateSd:np.array,valueTarget:float,nMinibatch:int=64,nBatches:int=4000):
-        mbValue=valueTarget*np.ones([nMinibatch,1])
-        for batchIdx in range(nBatches):
-            states=np.random.normal(stateMean,stateSd,size=[nMinibatch,self.stateDim])
-            if batchIdx==0:
-                #init the network biases
-                temp,currLoss=sess.run([self.criticInit,self.loss],feed_dict={self.stateIn:states,self.valueIn:mbValue})
-            else:
-                #drive output towards the desired value
-                temp,currLoss=sess.run([self.optimize,self.loss],feed_dict={self.stateIn:states,self.valueIn:mbValue})
-            if batchIdx % 100 ==0:
-                print("Initializing critic with random Gaussian data, batch {}/{}, loss {}".format(batchIdx,nBatches,currLoss))
-        self.initialized=True

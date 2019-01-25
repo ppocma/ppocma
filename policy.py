@@ -5,13 +5,12 @@ os.environ["CUDA_VISIBLE_DEVICES"]="-1" #disable Tensorflow GPU usage, these sim
 import tensorflow as tf
 import MLP
 from collections import deque
-#import matplotlib
-#import matplotlib.pyplot as pp
 
 networkDepth=2
 networkUnits=64
 networkActivation="lrelu"
 networkSkips=False
+networkUnitNormInit=True
 usePPOLoss=False
 separateVarAdapt=False
 learningRate=0.001
@@ -20,22 +19,24 @@ useSigmaSoftClip=True
 PPOepsilon=0.2
 piEpsilon=0
 nHistory=1
-initWithFirstBatch=True
-entropyLossWeight=0
 globalVariance=False
 trainableGlobalVariance=True
 useGradientClipping=False
 maxGradientNorm=0.5
+negativeAdvantageAvoidanceSigma=0
 
 def softClip(x, minVal, maxVal):
     #return minVal+(maxVal-minVal)*(1.0+0.5*tf.tanh(x))
     return minVal+(maxVal-minVal)*tf.sigmoid(x)
 
 class Policy:
-    def __init__(self,stateDim:int,actionDim:int,actionMinLimit:np.array,actionMaxLimit:np.array,mode="PPO-CMA"):
+    def __init__(self, stateDim:int, actionDim:int, actionMinLimit:np.array, actionMaxLimit:np.array, mode="PPO-CMA"
+                 , entropyLossWeight=0):
         maxSigma=1.0*(actionMaxLimit-actionMinLimit)
         self.mode=mode
 
+        #to be able to benchmark with Schulman's original network architecture, we may have to disable the data-dependent init of the DenseNet module
+        MLP.useUnitNormInit=networkUnitNormInit
 
         #some bookkeeping
         self.usedSigmaSum=0
@@ -44,6 +45,8 @@ class Policy:
         #inputs
         stateIn=tf.placeholder(dtype=tf.float32,shape=[None,stateDim],name="stateIn")
         actionIn=tf.placeholder(dtype=tf.float32,shape=[None,actionDim],name="actionIn")    #training targets for policy network
+        oldPolicyMean=tf.placeholder(dtype=tf.float32,shape=[None,actionDim],name="oldPolicyMeanIn")    #training targets for policy network
+        self.oldPolicyMean=oldPolicyMean
         advantagesIn=tf.placeholder(dtype=tf.float32,shape=[None],name="advantagesIn")     #weights, computed based on action advantages
         logPiOldIn=tf.placeholder(dtype=tf.float32,shape=[None],name="logPiOldIn")             #pi_old(a | s), used for PPO
         initSigmaIn=tf.placeholder(dtype=tf.float32,shape=[1,actionDim],name="initSigmaIn")
@@ -124,6 +127,13 @@ class Policy:
             posAdvantages=tf.nn.relu(advantagesIn)
             policySigmaLoss=-tf.reduce_mean(posAdvantages*logpNoMeanGrad)
             policyMeanLoss=-tf.reduce_mean(posAdvantages*logpNoVarGrad)
+            if negativeAdvantageAvoidanceSigma>0:
+                negAdvantages=tf.nn.relu(-advantagesIn)
+                mirroredAction=oldPolicyMean-(actionIn-oldPolicyMean)  #mirror negative advantage actions around old policy mean (convert them to positive advantage actions assuming linearity) 
+                logpNoVarGradMirrored=-tf.reduce_sum(0.5*tf.square(mirroredAction-policyMean)/policyVarNoGrad+0.5*policyLogVarNoGrad,axis=1) 
+                effectiveKernelSqWidth=negativeAdvantageAvoidanceSigma*negativeAdvantageAvoidanceSigma*policyVarNoGrad
+                avoidanceKernel=tf.reduce_mean(tf.exp(-0.5*tf.square(actionIn-oldPolicyMean)/effectiveKernelSqWidth),axis=1)
+                policyMeanLoss-=tf.reduce_mean((negAdvantages*avoidanceKernel)*logpNoVarGradMirrored)
 
             #just to be on the safe side, if some batch has an occasional NaN, set the loss to zero
             policySigmaLoss=tf.where(tf.is_nan(policySigmaLoss), tf.zeros_like(policySigmaLoss),policySigmaLoss)
@@ -171,16 +181,16 @@ class Policy:
         self.initialized=False  #remember that one has to call init() before training (can't call it here as TF globals might not have been initialized yet)
 
     #init the policy with random Gaussian state samples, such that the network outputs the desired mean and sd
-    def init(self,sess:tf.Session,stateMean:np.array,stateSd:np.array,actionMean:np.array,actionSd:np.array,nMinibatch:int=64,nBatches:int=4000):
+    def init(self,sess:tf.Session,stateMean:np.array,stateSd:np.array,actionMean:np.array,actionSd:np.array,nMinibatch:int=64,nBatches:int=4000,verbose=True):
         for batchIdx in range(nBatches):
             states=np.random.normal(stateMean,stateSd,size=[nMinibatch,self.stateDim])
             if batchIdx==0 and len(self.policyInit)>0:
-                #init the network biases 
+                #init the MLP biases to prevent large values
                 temp,currLoss=sess.run([self.policyInit,self.policyInitLoss],feed_dict={self.stateIn:states,self.actionIn:np.reshape(actionMean,[1,self.actionDim]),self.initSigmaIn:np.reshape(actionSd,[1,self.actionDim])})
             else:
                 #drive output towards the desired mean and sd
                 temp,currLoss=sess.run([self.optimizePolicyInit,self.policyInitLoss],feed_dict={self.stateIn:states,self.actionIn:np.reshape(actionMean,[1,self.actionDim]),self.initSigmaIn:np.reshape(actionSd,[1,self.actionDim])})
-            if batchIdx % 100 ==0:
+            if verbose and (batchIdx % 100 ==0):
                 print("Initializing policy with random Gaussian data, batch {}/{}, loss {}".format(batchIdx,nBatches,currLoss))
         self.initialized=True
     #init the policy with uniform random state samples, such that the network outputs the desired mean and sd
@@ -188,7 +198,7 @@ class Policy:
         for batchIdx in range(nBatches):
             states=np.random.uniform(stateMin,stateMax,size=[nMinibatch,self.stateDim])
             if batchIdx==0 and len(self.policyInit)>0:
-                #init the network biases
+                #init the MLP biases to prevent large values
                 temp,currLoss=sess.run([self.policyInit,self.policyInitLoss],feed_dict={self.stateIn:states,self.actionIn:np.reshape(actionMean,[1,self.actionDim]),self.initSigmaIn:np.reshape(actionSd,[1,self.actionDim])})
             else:
                 #drive output towards the desired mean and sd
@@ -197,7 +207,7 @@ class Policy:
                 print("Initializing policy with random Gaussian data, batch {}/{}, loss {}".format(batchIdx,nBatches,currLoss))
         self.initialized=True
     #if nBatches==0, nEpochs will be used
-    def train(self,sess:tf.Session,states:np.array,actions:np.array,advantages:np.array,nMinibatch:int,nEpochs:int,nBatches:int=0,stateOffset=0,stateScale=1):
+    def train(self,sess:tf.Session,states:np.array,actions:np.array,advantages:np.array,nMinibatch:int,nEpochs:int,nBatches:int=0,stateOffset=0,stateScale=1,verbose=True):
         assert(np.all(np.isfinite(states)))
         assert(np.all(np.isfinite(actions)))
         assert(np.all(np.isfinite(advantages)))
@@ -230,6 +240,7 @@ class Policy:
         nVarAdaptBatches=nBatches
         mbStates=np.zeros([nMinibatch,self.stateDim])
         mbActions=np.zeros([nMinibatch,self.actionDim])
+        mbOldMean=np.zeros([nMinibatch,self.actionDim])
         mbAdvantages=np.zeros([nMinibatch])
         logPiOld=np.ones([nData])
         mbLogPiOld=np.ones([nMinibatch])
@@ -240,6 +251,8 @@ class Policy:
             logPiOld=np.sum(-0.5*np.square(actions-policyMean)/policyVar-0.5*policyLogVar,axis=1)
         if separateVarAdapt:
             assert(usePPOLoss==False)
+            #if negativeAdvantageAvoidanceSigma>0:
+            oldMeans=sess.run(self.policyMean,{self.stateIn:scaledStates})
             for batchIdx in range(nBatches + nVarAdaptBatches if separateVarAdapt else nBatches):
                 if batchIdx<nVarAdaptBatches:
                     historyLen=len(self.history)
@@ -254,7 +267,7 @@ class Policy:
                     advantageMean=np.mean(mbAdvantages)
                     mbStates=(mbStates-stateOffset)*stateScale  #here, we must scale per batch because using the history
                     temp,currLoss=sess.run([self.optimizePolicySigma,self.policyLoss],feed_dict={self.stateIn:mbStates,self.actionIn:mbActions,self.advantagesIn:mbAdvantages})
-                    if batchIdx % 100 == 0:
+                    if verbose and (batchIdx % 100 == 0):
                         print("Adapting policy variance, batch {}/{}, mean advantage {:.2f}, loss {}".format(batchIdx,nVarAdaptBatches,advantageMean,currLoss))
                 #temp,currLoss=sess.run([self.optimizePolicyMean,self.policyLoss],feed_dict={self.stateIn:mbStates,self.actionIn:mbActions,self.advantagesIn:mbAdvantages})
                 else:
@@ -263,10 +276,12 @@ class Policy:
                         dataIdx=np.random.randint(0,nData)
                         mbStates[i,:]=scaledStates[dataIdx,:]  
                         mbActions[i,:]=actions[dataIdx,:]
+                        if self.stateDim>0:
+                            mbOldMean[i,:]=oldMeans[dataIdx,:]
                         mbAdvantages[i]=advantages[dataIdx]
                     advantageMean=np.mean(mbAdvantages)
-                    temp,currLoss=sess.run([self.optimizePolicyMean,self.policyLoss],feed_dict={self.stateIn:mbStates,self.actionIn:mbActions,self.advantagesIn:mbAdvantages,self.logPiOldIn:mbLogPiOld})
-                    if batchIdx % 100 == 0:
+                    temp,currLoss=sess.run([self.optimizePolicyMean,self.policyLoss],feed_dict={self.stateIn:mbStates,self.actionIn:mbActions,self.advantagesIn:mbAdvantages,self.logPiOldIn:mbLogPiOld, self.oldPolicyMean:mbOldMean})
+                    if verbose and (batchIdx % 100 == 0):
                         print("Adapting policy mean, batch {}/{}, mean advantage {:.2f}, loss {}".format(batchIdx-nVarAdaptBatches,nBatches,advantageMean,currLoss))
 
         else:
@@ -280,7 +295,7 @@ class Policy:
                     mbLogPiOld[i]=logPiOld[dataIdx]
                 advantageMean=np.mean(mbAdvantages)
                 temp,currLoss=sess.run([self.optimizePolicy,self.policyLoss],feed_dict={self.stateIn:mbStates,self.actionIn:mbActions,self.advantagesIn:mbAdvantages,self.logPiOldIn:mbLogPiOld})
-                if batchIdx % 100 == 0:
+                if verbose and (batchIdx % 100 == 0):
                     print("Training policy, batch {}/{}, mean advantage {:.2f}, loss {}".format(batchIdx,nBatches,advantageMean,currLoss))
     def setGlobalStdev(self,relStdev:float, sess:tf.Session):
         assert(globalVariance and (not trainableGlobalVariance))
@@ -317,6 +332,8 @@ class Policy:
         return result
     def getExpectation(self,sess:tf.Session,observations:np.array):
         return sess.run(self.policyMean,feed_dict={self.stateIn:observations})
+    def getSd(self,sess:tf.Session,observations:np.array):
+        return sess.run(self.policySigma,feed_dict={self.stateIn:observations})
     #def get2dEllipse(self,observations:np.array):
     #    def logProb(self,state:np.array,action:np.array):
     #    def adapt(self,states:np.array,actions:np.array,advantages:np.array,batchSize:int,nEpochs:int):

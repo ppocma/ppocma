@@ -1,2 +1,0 @@
-model_checkpoint_path: "humanoid_policy"
-all_model_checkpoint_paths: "humanoid_policy"

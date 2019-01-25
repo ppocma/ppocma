@@ -1,1 +1,0 @@
-python train.py Humanoid-v2 --useScaler --mode PPO --iterSimBudget=32000 --maxSimSteps 10000000 --nBenchmarkRuns 5  --networkWidth 64
