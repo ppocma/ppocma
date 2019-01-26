@@ -107,7 +107,7 @@ Note that PPO-CMA only works with continuous control tasks like humanoid movemen
 ## Prerequisites 
 - Python 3.5 or above
 - Tensorflow
-- OpenAI Gym
+- OpenAI Gym (Optional, needed for testing with OpenAI Gym environments, e.g., in the tutorial above)
 - MuJoCo (Optional, needed for OpenAI Gym MuJoCo environments) 
 - Roboschool (Optional, needed for OpenAI Gym Roboschool environments)
 
