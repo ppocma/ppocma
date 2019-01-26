@@ -136,7 +136,7 @@ For example, the following command runs the PPO-CMA (with negative-to-positive a
 
 ```python Run.py --env_name Humanoid-v2 --max_steps 10000000 --mode PPO-CMA-m --iter_steps 32000 --batch_size 512 --history_buffer_size 9 --run_suffix 1```
 
-## Code structure:
+## Code Structure
 
 - ```Agent.py``` 	An easy to use agent class, the main interface to the algorithm 
 - ```critic.py```	The value function predictor network
@@ -145,3 +145,7 @@ For example, the following command runs the PPO-CMA (with negative-to-positive a
 - ```policy.py```	The policy network
 - ```Run.py```      The main script for training the models (the command line arguments explained below)
 - ```utils.py```	The automatic observation scaler
+
+# Reproducing the Plots in the Paper
+
+Two scripts ```reproduce_convergence_plot.py``` and ```reproduce_humanoid_plot.py``` can be used for reproducing the plots in the paper. However, each one might take 2 or 3 days to complete.
