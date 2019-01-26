@@ -12,6 +12,9 @@ from Agent import Agent
 #Larger values are slower but more robust.
 N=2000
 
+# Stop training after this many steps
+max_steps=1000000
+
 # Init tensorflow
 sess = tf.InteractiveSession()
 
@@ -31,19 +34,14 @@ agent=Agent(
 tf.global_variables_initializer().run(session=sess)
 agent.init(sess)  # must be called after TensorFlow global variables init
 
-# How many simulation steps we've taken in total
-totalSimSteps = 0
-
-# Stop training after this many steps
-max_steps=1000000
-
 # Main training loop
+totalSimSteps = 0
 while totalSimSteps < max_steps:
-    #Counter for total simulation steps taken in this iteration
-    episodeSimSteps = 0
 
     #Run episodes until the iteration simulation budget runs out
-    while episodeSimSteps < N:
+    iterSimSteps = 0
+    while iterSimSteps < N:
+
         # Reset the simulation 
         observation = sim.reset()
 
@@ -52,11 +50,11 @@ while totalSimSteps < max_steps:
             # Query the agent for action given the state observation
             action = agent.act(sess,observation)
 
-            # Simulate using the action
-            # Note: this tutorial does not repeat the same action for two steps, 
-            # unlike the Run.py script used for the ICML paper results.
-            # Repeating the action for multiple steps seems to yield better exploration in 
-            # most cases, possibly because it reduces high-frequency action noise.
+            #Simulate using the action
+            #Note: this tutorial does not repeat the same action for two steps, 
+            #unlike the Run.py script used for the ICML paper results.
+            #Repeating the action for multiple steps seems to yield better exploration 
+            #in most cases, possibly because it reduces high-frequency action noise.
             nextObservation, reward, done, info = sim.step(action[0, :])
 
             # Save the experience point
@@ -64,13 +62,13 @@ while totalSimSteps < max_steps:
             observation=nextObservation
 
             # Bookkeeping
-            episodeSimSteps += 1
+            iterSimSteps += 1
 
             # Episode terminated? (e.g., due to time limit or failure)
             if done:
                 break
 
-    #All episodes of this iteration done, print results and update the agent
-    totalSimSteps += episodeSimSteps
+    #All episodes of this iteration done, update the agent and print results
     averageEpisodeReturn=agent.updateWithMemorized(sess,verbose=False)
+    totalSimSteps += iterSimSteps
     print("Simulation steps {}, average episode return {}".format(totalSimSteps,averageEpisodeReturn))

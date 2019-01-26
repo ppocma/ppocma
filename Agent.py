@@ -13,7 +13,6 @@ import math
 import os
 os.environ["CUDA_VISIBLE_DEVICES"]="-1" #disable Tensorflow GPU usage, these simple graphs run faster on CPU
 import tensorflow as tf
-import policy as pl
 from policy import Policy
 from critic import Critic
 from utils import Scaler
@@ -96,13 +95,6 @@ class Agent:
                  , sdLowLimit=0.01, useScaler:bool=True, criticTimestepScale=0.001):
         #Create policy network 
         print("Creating policy")
-        pl.networkActivation=activation
-        pl.networkDepth=nHidden
-        pl.networkUnits=nUnitsPerLayer
-        pl.networkSkips=False
-        pl.learningRate=learningRate
-        pl.minSigma=sdLowLimit
-        pl.PPOepsilon=PPOepsilon
         self.actionMin=actionMin.copy()
         self.actionMax=actionMax.copy()
         self.actionDim=actionDim
@@ -115,37 +107,31 @@ class Agent:
         self.gamma=gamma
         self.GAElambda=GAElambda
         self.criticTimestepScale=0 if gamma==0 else criticTimestepScale     #with gamma==0, no need for this
+        piEpsilon = None
+        nHistory = 1
+        negativeAdvantageAvoidanceSigma = 0
         if mode=="PPO-CMA" or mode=="PPO-CMA-m":
-            pl.usePPOLoss=False           #if True, we use PPO's clipped surrogate loss function instead of the standard -A_i * log(pi(a_i | s_i))
-            pl.separateVarAdapt=True   
+            usePPOLoss=False           #if True, we use PPO's clipped surrogate loss function instead of the standard -A_i * log(pi(a_i | s_i))
+            separateVarAdapt=True
             self.reluAdvantages=True if mode=="PPO-CMA" else False
-            pl.nHistory=H             #policy mean adapts immediately, policy covariance as an aggreagate of this many past iterations
-            pl.useSigmaSoftClip=True
-            pl.negativeAdvantageAvoidanceSigma=1 if mode=="PPO-CMA-m" else 0
-        elif mode=="PG":
-            pl.usePPOLoss=False           #if True, we use PPO's clipped surrogate loss function instead of the standard -A_i * log(pi(a_i | s_i))
-            pl.separateVarAdapt=False   
-            self.reluAdvantages=True
-            pl.nHistory=1             #policy mean adapts immediately, policy covariance as an aggreagate of this many past iterations
-            pl.useSigmaSoftClip=True
-            pl.negativeAdvantageAvoidanceSigma=0
-        elif mode=="PG-m":
-            pl.usePPOLoss=False           #if True, we use PPO's clipped surrogate loss function instead of the standard -A_i * log(pi(a_i | s_i))
-            pl.separateVarAdapt=False   
-            self.reluAdvantages=False
-            pl.nHistory=1             #policy mean adapts immediately, policy covariance as an aggreagate of this many past iterations
-            pl.useSigmaSoftClip=True
-            pl.negativeAdvantageAvoidanceSigma=1
+            nHistory=H             #policy mean adapts immediately, policy covariance as an aggreagate of this many past iterations
+            useSigmaSoftClip=True
+            negativeAdvantageAvoidanceSigma=1 if mode=="PPO-CMA-m" else 0
         elif mode=="PPO":
-            pl.usePPOLoss=True           #if True, we use PPO's clipped surrogate loss function instead of the standard -A_i * log(pi(a_i | s_i))
-            separateSigmaAdapt=False
+            usePPOLoss=True           #if True, we use PPO's clipped surrogate loss function instead of the standard -A_i * log(pi(a_i | s_i))
+            separateVarAdapt = False
+            # separateSigmaAdapt=False
             self.reluAdvantages=False
-            pl.entropyLossWeight=entropyLossWeight
-            pl.useSigmaSoftClip=True
-            pl.piEpsilon=0 
+            useSigmaSoftClip=True
+            piEpsilon=0
         else:
             raise("Unknown mode {}".format(mode))
-        self.policy=Policy(stateDim, actionDim, actionMin, actionMax, entropyLossWeight=PPOentropyLossWeight)
+        self.policy=Policy(stateDim, actionDim, actionMin, actionMax, entropyLossWeight=PPOentropyLossWeight
+                           , networkActivation=activation, networkDepth=nHidden, networkUnits=nUnitsPerLayer
+                           , networkSkips=False, learningRate=learningRate, minSigma=sdLowLimit, PPOepsilon=PPOepsilon
+                           , usePPOLoss=usePPOLoss, separateVarAdapt=separateVarAdapt, nHistory=nHistory
+                           , useSigmaSoftClip=useSigmaSoftClip, piEpsilon=piEpsilon
+                           , negativeAdvantageAvoidanceSigma=negativeAdvantageAvoidanceSigma)
 
         #Create critic network, +1 stateDim because at least in OpenAI gym, episodes are time-limited and the value estimates thus depend on simulation time.
         #Thus, we use time step as an additional feature for the critic.

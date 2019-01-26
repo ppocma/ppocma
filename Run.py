@@ -120,6 +120,7 @@ def main(env_name, mode, learning_rate, ppo_epsilon, ppo_ent_l_w, max_steps, ite
         logger.record_tabular("Average policy std", agent.getAverageActionStdev())
         logger.dump_tabular()
         agent.update(sess, trajectories, batchSize=batch_size, nBatches=n_updates, verbose=verbose)
+    sess.close()
     print('Finished run for the settings %s' % suffix)
 
 if __name__ == "__main__":

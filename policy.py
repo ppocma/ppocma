@@ -6,24 +6,6 @@ import tensorflow as tf
 import MLP
 from collections import deque
 
-networkDepth=2
-networkUnits=64
-networkActivation="lrelu"
-networkSkips=False
-networkUnitNormInit=True
-usePPOLoss=False
-separateVarAdapt=False
-learningRate=0.001
-minSigma=0.01
-useSigmaSoftClip=True
-PPOepsilon=0.2
-piEpsilon=0
-nHistory=1
-globalVariance=False
-trainableGlobalVariance=True
-useGradientClipping=False
-maxGradientNorm=0.5
-negativeAdvantageAvoidanceSigma=0
 
 def softClip(x, minVal, maxVal):
     #return minVal+(maxVal-minVal)*(1.0+0.5*tf.tanh(x))
@@ -31,12 +13,35 @@ def softClip(x, minVal, maxVal):
 
 class Policy:
     def __init__(self, stateDim:int, actionDim:int, actionMinLimit:np.array, actionMaxLimit:np.array, mode="PPO-CMA"
-                 , entropyLossWeight=0):
+                 , entropyLossWeight=0, networkDepth=2, networkUnits=64, networkActivation="lrelu"
+                 , networkSkips=False, networkUnitNormInit=True, usePPOLoss=False, separateVarAdapt=False
+                 , learningRate=0.001, minSigma=0.01, useSigmaSoftClip=True, PPOepsilon=0.2, piEpsilon=0, nHistory=1
+                 , globalVariance=False, trainableGlobalVariance=True, useGradientClipping=False
+                 , maxGradientNorm=0.5, negativeAdvantageAvoidanceSigma=0):
+        self.networkDepth = networkDepth
+        self.networkUnits = networkUnits
+        self.networkActivation = networkActivation
+        self.networkSkips = networkSkips
+        self.networkUnitNormInit = networkUnitNormInit
+        self.usePPOLoss = usePPOLoss
+        self.separateVarAdapt = separateVarAdapt
+        self.learningRate = learningRate
+        self.minSigma = minSigma
+        self.useSigmaSoftClip=useSigmaSoftClip
+        self.PPOepsilon = PPOepsilon
+        self.piEpsilon = piEpsilon
+        self.nHistory = nHistory
+        self.globalVariance = globalVariance
+        self.trainableGlobalVariance = trainableGlobalVariance
+        self.useGradientClipping = useGradientClipping
+        self.maxGradientNorm = maxGradientNorm
+        self.negativeAdvantageAvoidanceSigma = negativeAdvantageAvoidanceSigma
+
         maxSigma=1.0*(actionMaxLimit-actionMinLimit)
         self.mode=mode
 
         #to be able to benchmark with Schulman's original network architecture, we may have to disable the data-dependent init of the DenseNet module
-        MLP.useUnitNormInit=networkUnitNormInit
+        MLP.useUnitNormInit=self.networkUnitNormInit
 
         #some bookkeeping
         self.usedSigmaSum=0
@@ -60,59 +65,59 @@ class Policy:
         if stateDim==0:
             #We don't have state at all => policyMean and variance are simply TensorFlow variables
             policyMean=tf.Variable(initial_value=np.zeros([actionDim]),dtype=tf.float32)
-            policyLogVar=tf.Variable(initial_value=np.log(np.square(0.5*(actionMaxLimit-actionMinLimit)))*np.ones([actionDim]),dtype=tf.float32,trainable=trainableGlobalVariance)
+            policyLogVar=tf.Variable(initial_value=np.log(np.square(0.5*(actionMaxLimit-actionMinLimit)))*np.ones([actionDim]),dtype=tf.float32,trainable=self.trainableGlobalVariance)
             self.globalLogVarVariable=policyLogVar
         else:
             #We have state, i.e., need neural networks that output a state-dependent mean and variance
-            if separateVarAdapt or globalVariance:
+            if self.separateVarAdapt or self.globalVariance:
                 #Need separate networks for mean and variance
-                policyMean,policyMeanInit=MLP.mlp(stateIn,networkDepth,networkUnits,actionDim,networkActivation,firstLinearLayerUnits,networkSkips)
+                policyMean,policyMeanInit=MLP.mlp(stateIn,self.networkDepth,self.networkUnits,actionDim,self.networkActivation,firstLinearLayerUnits,self.networkSkips)
                 policyInit.append(policyMeanInit)
-                if globalVariance:
-                    policyLogVar=tf.Variable(initial_value=np.log(np.square(0.5*(actionMaxLimit-actionMinLimit)))*np.ones([actionDim]),dtype=tf.float32,trainable=trainableGlobalVariance)
+                if self.globalVariance:
+                    policyLogVar=tf.Variable(initial_value=np.log(np.square(0.5*(actionMaxLimit-actionMinLimit)))*np.ones([actionDim]),dtype=tf.float32,trainable=self.trainableGlobalVariance)
                     self.globalLogVarVariable=policyLogVar
                 else:
-                    policyLogVar,policyLogVarInit=MLP.mlp(stateIn,networkDepth,networkUnits,actionDim,networkActivation,firstLinearLayerUnits,networkSkips)
+                    policyLogVar,policyLogVarInit=MLP.mlp(stateIn,self.networkDepth,self.networkUnits,actionDim,self.networkActivation,firstLinearLayerUnits,self.networkSkips)
                     policyInit.append(policyLogVarInit)
             else:
                 #Single network that outputs both mean and variance
-                policyMeanAndLogVar,policyMeanAndLogVarInit=MLP.mlp(stateIn,networkDepth,networkUnits,actionDim*2,networkActivation,firstLinearLayerUnits,networkSkips)
+                policyMeanAndLogVar,policyMeanAndLogVarInit=MLP.mlp(stateIn,self.networkDepth,self.networkUnits,actionDim*2,self.networkActivation,firstLinearLayerUnits,self.networkSkips)
                 policyMean=policyMeanAndLogVar[:,:actionDim]
                 policyLogVar=policyMeanAndLogVar[:,actionDim:]
                 policyInit.append(policyMeanAndLogVarInit)
 
         #sigmoid-clipping of mean to ensure stability
         policyMean=softClip(policyMean, actionMinLimit,actionMaxLimit)
-        if useSigmaSoftClip:
+        if self.useSigmaSoftClip:
             #sigmoid-clipping of log var to ensure stability
             #Note: tanh or hard clipping doesn't work as well due to higher chance of zero or almost zero gradients 
             maxLogVar=np.log(maxSigma*maxSigma)
-            minLogVar=np.log(minSigma*minSigma)
+            minLogVar=np.log(self.minSigma*self.minSigma)
             policyLogVar=softClip(policyLogVar,minLogVar,maxLogVar)
         policyVar=tf.exp(policyLogVar)  
         policySigma=tf.sqrt(policyVar)
 
 
         #loss functions
-        if usePPOLoss:
+        if self.usePPOLoss:
             def loss(policyMean,policyVar,policyLogVar):
                 #1/sqrt(var)=exp(log(1/sqrt(var)))=exp(log(1)-log(var^0.5))=exp(-0.5*log(var))=exp(-log(std))
                 logPi=tf.reduce_sum(-0.5*tf.square(actionIn-policyMean)/policyVar-0.5*policyLogVar,axis=1)
                 #Some PPO implementations use r=tf.exp(logPi-logPiOldIn). However, we've noticed this to cause NaNs especially
                 #with non-saturating policy network activation functions like lrelu and the MuJoCo humanoid env.
                 #Thus, we also support using the epsilon below to regularize. 
-                if piEpsilon==0:
+                if self.piEpsilon==0:
                     r=tf.exp(logPi-logPiOldIn)
                 else:
-                    r=tf.exp(logPi)/(piEpsilon+tf.exp(logPiOldIn))
-                perSampleLoss=tf.minimum(r*advantagesIn,tf.clip_by_value(r,1-PPOepsilon,1+PPOepsilon)*advantagesIn)
+                    r=tf.exp(logPi)/(self.piEpsilon+tf.exp(logPiOldIn))
+                perSampleLoss=tf.minimum(r*advantagesIn,tf.clip_by_value(r,1-self.PPOepsilon,1+self.PPOepsilon)*advantagesIn)
                 return -tf.reduce_mean(perSampleLoss) #because we want to minimize instead of maximize...
-            print("Using PPO clipped surrogate loss with epsilon {}".format(PPOepsilon))
+            print("Using PPO clipped surrogate loss with epsilon {}".format(self.PPOepsilon))
             policyLoss=loss(policyMean,policyVar,policyLogVar)
             if entropyLossWeight>0:
                 #Entropy of a diagonal Gaussian=0.5*log(det(Cov))=0.5*log(trace(Cov))=0.5*sum(log(diag(Cov)))
                 policyLoss-=entropyLossWeight*0.5*tf.reduce_mean(tf.reduce_sum(policyLogVar,axis=1))
-            assert(separateVarAdapt==False)
+            assert(self.separateVarAdapt==False)
             #just to be on the safe side, if some batch has an occasional NaN, set the loss to zero
             policyLoss=tf.where(tf.is_nan(policyLoss), tf.zeros_like(policyLoss),policyLoss)
             policyMeanLoss=policyLoss
@@ -127,11 +132,11 @@ class Policy:
             posAdvantages=tf.nn.relu(advantagesIn)
             policySigmaLoss=-tf.reduce_mean(posAdvantages*logpNoMeanGrad)
             policyMeanLoss=-tf.reduce_mean(posAdvantages*logpNoVarGrad)
-            if negativeAdvantageAvoidanceSigma>0:
+            if self.negativeAdvantageAvoidanceSigma>0:
                 negAdvantages=tf.nn.relu(-advantagesIn)
                 mirroredAction=oldPolicyMean-(actionIn-oldPolicyMean)  #mirror negative advantage actions around old policy mean (convert them to positive advantage actions assuming linearity) 
                 logpNoVarGradMirrored=-tf.reduce_sum(0.5*tf.square(mirroredAction-policyMean)/policyVarNoGrad+0.5*policyLogVarNoGrad,axis=1) 
-                effectiveKernelSqWidth=negativeAdvantageAvoidanceSigma*negativeAdvantageAvoidanceSigma*policyVarNoGrad
+                effectiveKernelSqWidth=self.negativeAdvantageAvoidanceSigma*self.negativeAdvantageAvoidanceSigma*policyVarNoGrad
                 avoidanceKernel=tf.reduce_mean(tf.exp(-0.5*tf.square(actionIn-oldPolicyMean)/effectiveKernelSqWidth),axis=1)
                 policyMeanLoss-=tf.reduce_mean((negAdvantages*avoidanceKernel)*logpNoVarGradMirrored)
 
@@ -149,11 +154,11 @@ class Policy:
 
         #optimizers
         def optimize(loss):
-            optimizer=tf.train.AdamOptimizer(learning_rate=learningRate)
-            if not useGradientClipping:
+            optimizer=tf.train.AdamOptimizer(learning_rate=self.learningRate)
+            if not self.useGradientClipping:
                 return optimizer.minimize(loss)
             gradients, variables = zip(*optimizer.compute_gradients(loss))
-            gradients, _ = tf.clip_by_global_norm(gradients, maxGradientNorm)
+            gradients, _ = tf.clip_by_global_norm(gradients, self.maxGradientNorm)
             return optimizer.apply_gradients(zip(gradients, variables))
         self.optimizePolicy=optimize(policyLoss)
         self.optimizePolicySigma=optimize(policySigmaLoss)
@@ -220,7 +225,7 @@ class Policy:
 
         #manage history
         self.history.append([states.copy(),actions.copy(),advantages.copy()])
-        if len(self.history)>nHistory:
+        if len(self.history)>self.nHistory:
             self.history.popleft()
 
         #safety-check that the observed state distribution is at least roughly zero-mean unit sd
@@ -244,16 +249,16 @@ class Policy:
         mbAdvantages=np.zeros([nMinibatch])
         logPiOld=np.ones([nData])
         mbLogPiOld=np.ones([nMinibatch])
-        if usePPOLoss:
+        if self.usePPOLoss:
             policyMean,policyVar,policyLogVar=sess.run([self.policyMean,self.policyVar,self.policyLogVar],feed_dict={self.stateIn:scaledStates})
             #for i in range(nData):
             #    logPiOld[i]=np.sum(-0.5*np.square(actions[i,:]-policyMean[i,:])/policyVar[i,:]-0.5*policyLogVar[i,:])
             logPiOld=np.sum(-0.5*np.square(actions-policyMean)/policyVar-0.5*policyLogVar,axis=1)
-        if separateVarAdapt:
-            assert(usePPOLoss==False)
+        if self.separateVarAdapt:
+            assert(self.usePPOLoss==False)
             #if negativeAdvantageAvoidanceSigma>0:
             oldMeans=sess.run(self.policyMean,{self.stateIn:scaledStates})
-            for batchIdx in range(nBatches + nVarAdaptBatches if separateVarAdapt else nBatches):
+            for batchIdx in range(nBatches + nVarAdaptBatches if self.separateVarAdapt else nBatches):
                 if batchIdx<nVarAdaptBatches:
                     historyLen=len(self.history)
                     for i in range(nMinibatch):
@@ -285,7 +290,7 @@ class Policy:
                         print("Adapting policy mean, batch {}/{}, mean advantage {:.2f}, loss {}".format(batchIdx-nVarAdaptBatches,nBatches,advantageMean,currLoss))
 
         else:
-            for batchIdx in range(nBatches + nVarAdaptBatches if separateVarAdapt else nBatches):
+            for batchIdx in range(nBatches + nVarAdaptBatches if self.separateVarAdapt else nBatches):
                 for i in range(nMinibatch):
                     dataIdx=np.random.randint(0,nData)
                     if self.stateDim!=0:
@@ -298,7 +303,7 @@ class Policy:
                 if verbose and (batchIdx % 100 == 0):
                     print("Training policy, batch {}/{}, mean advantage {:.2f}, loss {}".format(batchIdx,nBatches,advantageMean,currLoss))
     def setGlobalStdev(self,relStdev:float, sess:tf.Session):
-        assert(globalVariance and (not trainableGlobalVariance))
+        assert(self.globalVariance and (not self.trainableGlobalVariance))
         stdev=relStdev*(self.actionMaxLimit-self.actionMinLimit)
         var=np.square(stdev)
         logVar=np.log(var)
@@ -321,7 +326,7 @@ class Policy:
             if self.stateDim==0:
                 result[i,:]=np.random.normal(policyMean,policySigma,[self.actionDim])
             else:
-                if globalVariance:
+                if self.globalVariance:
                     result[i,:]=np.random.normal(policyMean[i,:],policySigma,[self.actionDim])
                 else:
                     result[i,:]=np.random.normal(policyMean[i,:],policySigma[i,:],[self.actionDim])
