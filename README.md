@@ -1,7 +1,7 @@
 
-# Introduction
+# PPO-CMA: Proximal Policy Optimization with Covariance Matrix Adaptation
 
-This repository contains the source code for the paper **PPO-CMA: Proximal Policy Optimization with Covariance Matrix Adaptation**, under review for ICML 2019. 
+This repository contains the source code for the PPO-CMA algorithm, under review for ICML 2019. 
 
 ![Image: PPO vs. PPO-CMA in a simple test problem](github-images/teaser.gif)
 
@@ -11,9 +11,11 @@ The .gif above shows how PPO-CMA converges much faster than [Proximal Policy Opt
 
 The .gif above is only a special case that one can visualize easily.
 
-The point is that we have found a way to make CMA-ES work in _deep reinforcement learning_. In the .gif, there's only one 2D action vector to optimize. In general RL, _one solves several action optimization problems  in parallel_, one for each possible state of an agent such as a walking robot. Thus, a generic black-box optimization approach like CMA-ES is not directly applicable.
+The point is that we have found a way to make CMA-ES work in _deep reinforcement learning_. In the .gif, there's only one 2D action vector to optimize. In general, RL solves _several action optimization problems  in parallel_, one for each possible state of an agent such as a walking robot. Thus, a generic black-box optimization approach like CMA-ES is not directly applicable.
 
-The key idea of PPO-CMA is to use separate neural networks to store and interpolate algorithm state variables (mean and covariance for sampling/exploring actions) as functions of agent state variables (body pose, velocity etc.). This way, _we can borrow from generic black-box optimization methods in the RL domain._ 
+The key idea of PPO-CMA is use separate neural networks to store and interpolate algorithm state variables (mean and covariance for sampling/exploring actions) as functions of agent state variables (body pose, velocity etc.). This way, _we can borrow from generic black-box optimization methods in the RL domain._ 
+
+We treat the so-called advantage function, estimated using [GAE](https://arxiv.org/pdf/1506.02438.pdf), as as analogous to the fitness function of CMA-ES.
 
 ![Image: Training progress using the Humanoid-v2 environment](github-images/Humanoid.png)
 
@@ -42,7 +44,7 @@ sess = tf.InteractiveSession()
 print("Creating simulation environment")
 sim = gym.make("MountainCarContinuous-v0")
 
-# Create the agent
+# Create the agent using the default parameters for the neural network architecture
 agent=Agent(
     stateDim=sim.observation_space.low.shape[0]
     , actionDim=sim.action_space.low.shape[0]
@@ -65,16 +67,17 @@ while totalSimSteps < max_steps:
         # Reset the simulation 
         observation = sim.reset()
 
-        # Simulate this episode until done
-        while True:
+        # Simulate this episode until done (e.g., due to time limit or failure)
+        done=False
+        while not done:
             # Query the agent for action given the state observation
             action = agent.act(sess,observation)
 
-            #Simulate using the action
-            #Note: this tutorial does not repeat the same action for two steps, 
-            #unlike the Run.py script used for the ICML paper results.
-            #Repeating the action for multiple steps seems to yield better exploration 
-            #in most cases, possibly because it reduces high-frequency action noise.
+            # Simulate using the action
+            # Note: this tutorial does not repeat the same action for multiple steps, 
+            # unlike the Run.py script used for the ICML paper results.
+            # Repeating the action for multiple steps seems to yield better exploration 
+            # in most cases, possibly because it reduces high-frequency action noise.
             nextObservation, reward, done, info = sim.step(action[0, :])
 
             # Save the experience point
@@ -83,10 +86,6 @@ while totalSimSteps < max_steps:
 
             # Bookkeeping
             iterSimSteps += 1
-
-            # Episode terminated? (e.g., due to time limit or failure)
-            if done:
-                break
 
     #All episodes of this iteration done, update the agent and print results
     averageEpisodeReturn=agent.updateWithMemorized(sess,verbose=False)
@@ -98,7 +97,7 @@ while totalSimSteps < max_steps:
 # Why PPO-CMA?
 Although there's no convergence guarantee, CMA-ES works extremely well in many non-convex, multimodal optimization problems. CMA-ES is also almost parameter free; one mainly needs to increase the iteration sampling budget to handle more difficult optimization problems. _According to our data, PPO-CMA inherits these traits_. 
 
-The name PPO-CMA is motivated by 1) We developed the algorithm to solve the variance adaptation problems of [Proximal Policy Optimization](https://blog.openai.com/openai-baselines-ppo/), and 2) Despite its modifications, PPO-CMA can be considered a proximal policy optimization method, because the updated policy does not diverge outside the proximity or trust region of the old policy. The mean of the updated policy converges to approximate the best actions sampled from the old policy.
+The name PPO-CMA is motivated by 1) We developed the algorithm to improve the variance adaptation of [Proximal Policy Optimization](https://blog.openai.com/openai-baselines-ppo/), and 2) Despite its modifications, PPO-CMA can be considered a proximal policy optimization method, because the updated policy does not diverge outside the proximity or trust region of the old policy. The mean of the updated policy converges to approximate the best actions sampled from the old policy.
 
 Note that PPO-CMA only works with continuous control tasks like humanoid movement. It's no good for retro Atari games where the actions are discrete button presses.
 
@@ -120,7 +119,7 @@ You can run ```Tutorial.py``` (the code above), or if you want to specify things
 All important parameters in the ```Run.py``` script are customizable with the following switches:
 
 - ```--env_name```: OpenAI Gym or Roboschool environment name (default=MountainCarContinuous-v0)  
-- ```-m``` or ```--mode```: Optimization mode, one of: PPO, PPO-CMA, or PPO-CMA-m (default=PPO-CMA-m). PPO-CMA-m is the recommended version since it uses the negative advantage samples.
+- ```-m``` or ```--mode```: Optimization mode, one of: PPO, PPO-CMA, or PPO-CMA-m (default=PPO-CMA-m). PPO-CMA-m is the recommended version, using the mirroring trick to convert negative advantages to positive ones.
 - ```-lr``` or ```--learning_rate```: Learning rate (default=5e-4)
 - ```--ppo_epsilon```: PPO epsilon (default=0.2)
 - ```--ppo_ent_l_w```: PPO entropy loss weight (default=0)
@@ -132,7 +131,7 @@ All important parameters in the ```Run.py``` script are customizable with the fo
 - ```--n_updates```: Number of updates per iteration (default=100)
 - ```--run_suffix```: Name suffix of the save directory (default="")
 
-For example, the following command runs the PPO-CMA (with negative-to-positive advantage conversion turned on, hence the '-m¨') on the MuJoCo Humanoid-v2 environment for 10M timesteps with N = 32K, minibatch size of 512, H = 9, and name suffix of "1" (for the save directory)
+For example, the following command runs the PPO-CMA on the MuJoCo Humanoid-v2 environment for 10M timesteps with N = 32K, minibatch size of 512, H = 9, and name suffix of "1" (for the save directory)
 
 ```python Run.py --env_name Humanoid-v2 --max_steps 10000000 --mode PPO-CMA-m --iter_steps 32000 --batch_size 512 --history_buffer_size 9 --run_suffix 1```
 
@@ -148,4 +147,4 @@ For example, the following command runs the PPO-CMA (with negative-to-positive a
 
 # Reproducing the Plots in the Paper
 
-Two scripts ```reproduce_convergence_plot.py``` and ```reproduce_humanoid_plot.py``` can be used for reproducing the plots in the paper. However, each one might take 2 or 3 days to complete.
+Two scripts ```reproduce_convergence_plot.py``` and ```reproduce_humanoid_plot.py``` can be used for reproducing the training curve plots in the paper. Note that this may take several days.
