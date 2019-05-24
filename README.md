@@ -1,7 +1,7 @@
 
 # PPO-CMA: Proximal Policy Optimization with Covariance Matrix Adaptation
 
-This repository contains the source code for the PPO-CMA algorithm, under review for ICML 2019. 
+This repository contains the source code for the PPO-CMA algorithm, described in [this paper](https://arxiv.org/abs/1810.02541).
 
 ![Image: PPO vs. PPO-CMA in a simple test problem](github-images/teaser.gif)
 
@@ -13,7 +13,7 @@ The .gif above is only a special case that one can visualize easily.
 
 The point is that we have found a way to make CMA-ES work in _deep reinforcement learning_. In the .gif, there's only one 2D action vector to optimize. In general, RL solves _several action optimization problems  in parallel_, one for each possible state of an agent such as a walking robot. Thus, a generic black-box optimization approach like CMA-ES is not directly applicable.
 
-The key idea of PPO-CMA is use separate neural networks to store and interpolate algorithm state variables (mean and covariance for sampling/exploring actions) as functions of agent state variables (body pose, velocity etc.). This way, _we can borrow from generic black-box optimization methods in the RL domain._ 
+The key idea of PPO-CMA is use separate neural networks to store and interpolate algorithm state variables (mean and covariance for sampling/exploring actions) as functions of agent state variables (body pose, velocity etc.). This way, _we can borrow from generic black-box optimization methods in the RL domain._
 
 We treat the so-called advantage function, estimated using [GAE](https://arxiv.org/pdf/1506.02438.pdf), as as analogous to the fitness function of CMA-ES.
 
@@ -64,7 +64,7 @@ while totalSimSteps < max_steps:
     iterSimSteps = 0
     while iterSimSteps < N:
 
-        # Reset the simulation 
+        # Reset the simulation
         observation = sim.reset()
 
         # Simulate this episode until done (e.g., due to time limit or failure)
@@ -74,9 +74,9 @@ while totalSimSteps < max_steps:
             action = agent.act(sess,observation)
 
             # Simulate using the action
-            # Note: this tutorial does not repeat the same action for multiple steps, 
-            # unlike the Run.py script used for the ICML paper results.
-            # Repeating the action for multiple steps seems to yield better exploration 
+            # Note: this tutorial does not repeat the same action for multiple steps,
+            # unlike the Run.py script used for the paper results.
+            # Repeating the action for multiple steps seems to yield better exploration
             # in most cases, possibly because it reduces high-frequency action noise.
             nextObservation, reward, done, info = sim.step(action[0, :])
 
@@ -95,7 +95,7 @@ while totalSimSteps < max_steps:
 ```
 
 # Why PPO-CMA?
-Although there's no convergence guarantee, CMA-ES works extremely well in many non-convex, multimodal optimization problems. CMA-ES is also almost parameter free; one mainly needs to increase the iteration sampling budget to handle more difficult optimization problems. _According to our data, PPO-CMA inherits these traits_. 
+Although there's no convergence guarantee, CMA-ES works extremely well in many non-convex, multimodal optimization problems. CMA-ES is also almost parameter free; one mainly needs to increase the iteration sampling budget to handle more difficult optimization problems. _According to our data, PPO-CMA inherits these traits_.
 
 The name PPO-CMA is motivated by 1) We developed the algorithm to improve the variance adaptation of [Proximal Policy Optimization](https://blog.openai.com/openai-baselines-ppo/), and 2) Despite its modifications, PPO-CMA can be considered a proximal policy optimization method, because the updated policy does not diverge outside the proximity or trust region of the old policy. The mean of the updated policy converges to approximate the best actions sampled from the old policy.
 
@@ -103,11 +103,11 @@ Note that PPO-CMA only works with continuous control tasks like humanoid movemen
 
 # Installation
 
-## Prerequisites 
+## Prerequisites
 - Python 3.5 or above
 - Tensorflow
 - OpenAI Gym (Optional, needed for testing with OpenAI Gym environments, e.g., in the tutorial above)
-- MuJoCo (Optional, needed for OpenAI Gym MuJoCo environments) 
+- MuJoCo (Optional, needed for OpenAI Gym MuJoCo environments)
 - Roboschool (Optional, needed for OpenAI Gym Roboschool environments)
 
 ## Testing the Code
@@ -137,7 +137,7 @@ For example, the following command runs the PPO-CMA on the MuJoCo Humanoid-v2 en
 
 ## Code Structure
 
-- ```Agent.py``` 	An easy to use agent class, the main interface to the algorithm 
+- ```Agent.py``` 	An easy to use agent class, the main interface to the algorithm
 - ```critic.py```	The value function predictor network
 - ```logger.py```   The logger script, taken from <a href="https://github.com/openai/baselines">OpenAI Baselines repository</a>
 - ```MLP.py```		Neural network helper class
