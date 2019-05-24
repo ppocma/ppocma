@@ -86,13 +86,14 @@ class Experience:
         return node
 
 class Agent:
-    #Warning! policy.py and critic.py are still work in progress and contain many global variables that should be converted to 
-    #class member variables. Before that is done, all instances of Agent must use the same values for the following:
-    #PPOepsilon,nHidden,nUnitsPerLayer,activation,H,entropyLossWeight,sdLowLimit
+    #In most cases, one only needs to specify stateDim, actionDim, actionMin, and actionMax.
+    #The mode parameter defines the algorithm. PPO-CMA-m is the default, i.e., PPO-CMA using the sample mirroring trick.
+    #Other choices are "PPO-CMA", "PPO", "PG" and "PG-pos". The two last modes denote vanilla policy gradient, and the "-pos"
+    #means that only positive advantage actions are used. See DidacticExample.py for visualization of different modes in a simple quadratic problem.
     def __init__(self, stateDim:int, actionDim:int, actionMin:np.array, actionMax:np.array, learningRate=0.0005
                  , gamma=0.99, GAElambda=0.95, PPOepsilon=0.2, PPOentropyLossWeight=0, nHidden:int=2
                  , nUnitsPerLayer:int=128, mode="PPO-CMA-m", activation="lrelu", H:int=9, entropyLossWeight:float=0
-                 , sdLowLimit=0.01, useScaler:bool=True, criticTimestepScale=0.001):
+                 , sdLowLimit=0.01, useScaler:bool=True, criticTimestepScale=0.001,initialMean:np.array=None,initialSd:np.array=None):
         #Create policy network 
         print("Creating policy")
         self.actionMin=actionMin.copy()
@@ -124,6 +125,20 @@ class Agent:
             self.reluAdvantages=False
             useSigmaSoftClip=True
             piEpsilon=0
+        elif mode=="PG":
+            usePPOLoss=False           #if True, we use PPO's clipped surrogate loss function instead of the standard -A_i * log(pi(a_i | s_i))
+            separateVarAdapt = False
+            # separateSigmaAdapt=False
+            self.reluAdvantages=False
+            useSigmaSoftClip=True
+            piEpsilon=0
+        elif mode=="PG-pos":
+            usePPOLoss=False           #if True, we use PPO's clipped surrogate loss function instead of the standard -A_i * log(pi(a_i | s_i))
+            separateVarAdapt = False
+            # separateSigmaAdapt=False
+            self.reluAdvantages=True
+            useSigmaSoftClip=True
+            piEpsilon=0
         else:
             raise("Unknown mode {}".format(mode))
         self.policy=Policy(stateDim, actionDim, actionMin, actionMax, entropyLossWeight=PPOentropyLossWeight
@@ -143,11 +158,22 @@ class Agent:
         self.experienceTrajectories=[]
         self.currentTrajectory=[]
 
+        #Init may take as argument a desired initial action mean and sd. These need to be remembered for the first iteration's act,
+        #which samples the initial mean and sd directly instead of utilizing the policy network.
+        if initialMean is not None:
+            self.initialMean=initialMean.copy()
+        else:
+            self.initialMean=0.5*(self.actionMin+self.actionMax)*np.ones(self.actionDim)
+        if initialSd is not None:
+            self.initialSd=initialSd.copy()
+        else:
+            self.initialSd=0.5*(self.actionMax-self.actionMin)*np.ones(self.actionDim)
+
     #call this after tensorflow's global variables initializer
     def init(self,sess:tf.Session,verbose=False):
         #Pretrain the policy to output the initial Gaussian for all states
-        self.policy.init(sess,0,1,0.5*(self.actionMin+self.actionMax)*np.ones(self.actionDim),0.5*(self.actionMax-self.actionMin)*np.ones(self.actionDim),256,2000,verbose)
-
+        self.policy.init(sess,0,1,self.initialMean,self.initialSd,256,2000,verbose)
+    
     #stateObs is an n-by-m tensor, where n = number of observations, m = number of observation variables
     def act(self,sess:tf.Session,stateObs:np.array,deterministic=False,clipActionToLimits=True):
         #Expand a single 1d-observation into a batch of 1 vectors
@@ -158,7 +184,7 @@ class Agent:
         #This is done because we don't know the scale of state observations a priori; thus, we can only init the state scaler in update(), 
         #after we have collected some experience.
         if self.useScaler and (not self.scalerInitialized):
-            actions=np.random.normal(0.5*(self.actionMin+self.actionMax)*np.ones(self.actionDim),0.5*(self.actionMax-self.actionMin)*np.ones(self.actionDim),size=[stateObs.shape[0],self.actionDim])
+            actions=np.random.normal(self.initialMean,self.initialSd,size=[stateObs.shape[0],self.actionDim])
             if clipActionToLimits:
                 actions=np.clip(actions,np.reshape(self.actionMin,[1,self.actionDim]),np.reshape(self.actionMax,[1,self.actionDim]))
             return actions
@@ -269,9 +295,11 @@ class Agent:
 
             #GAE loop, i.e., take the instantaneous advantage (how much value a single action brings, assuming that the
             #values given by the critic are unbiased), and smooth those along the trajectory using 1st-order IIR filter.
-            for step in reversed(range(nSteps-1)):
+            advantage=0
+            for step in reversed(range(nSteps)):
                 delta_t=t[step].r+self.gamma*values[step+1] - values[step]
-                t[step].advantage=delta_t+self.GAElambda*self.gamma*t[step+1].advantage
+                advantage=delta_t+self.GAElambda*self.gamma*advantage
+                t[step].advantage=advantage
 
         #Gather the advantages to linear array and apply ReLU and normalization if needed
         allAdvantages=np.zeros([nData])
@@ -289,6 +317,10 @@ class Agent:
             if verbose:
                 print("Advantage mean {}, sd{}".format(aMean,aSd))
             allAdvantages/=1e-10+aSd
+            #Clamp the normalized advantages to 3 sd:s, in case of outliers. 
+            #Commented out for now to allow computing additional ICML results, as this was not yet implemented in the ICML version
+            #advantageLimit=3
+            #allAdvantages=np.clip(allAdvantages,-advantageLimit,advantageLimit)
 
         #Train policy. Note that this uses original unscaled states, because the PPO-CMA variance training needs a history of
         #states in the same scale
